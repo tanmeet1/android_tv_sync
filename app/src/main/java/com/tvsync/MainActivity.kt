@@ -5,9 +5,11 @@ import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.graphics.Typeface
 import android.media.projection.MediaProjectionManager
+import android.net.Uri
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.provider.Settings
 import android.text.InputType
 import android.view.View
 import android.widget.ArrayAdapter
@@ -25,6 +27,7 @@ class MainActivity : Activity() {
     private val inputs = LinkedHashMap<String, View>()
     private lateinit var statusView: TextView
     private val ui = Handler(Looper.getMainLooper())
+    private var loading = false
 
     private val refresh = object : Runnable {
         override fun run() {
@@ -86,7 +89,7 @@ class MainActivity : Activity() {
         } else {
             lines += "Running: ${SyncStatus.captureFps} new screen frames/s, average brightness ${SyncStatus.avgLuma}/255."
             if (SyncStatus.barsText.isNotEmpty()) lines += SyncStatus.barsText
-            if (SyncStatus.blackForMs > BLACK_WARNING_MS) {
+            if (SyncStatus.blackForMs > SyncStatus.BLACK_WARNING_MS) {
                 lines += "The screen reads as solid black. Protected apps (Netflix, Prime Video...) " +
                     "and HDMI inputs can't be captured."
             }
@@ -136,7 +139,12 @@ class MainActivity : Activity() {
 
     private fun fieldView(field: Field): View {
         if (field.type == FieldType.BOOL) {
-            return CheckBox(this).apply { text = field.label }.also { inputs[field.key] = it }
+            val box = CheckBox(this).apply { text = field.label }
+            if (field.key == SettingsSchema.KEY_SHOW_OVERLAY) {
+                box.setOnCheckedChangeListener { _, checked -> if (!loading) onOverlayToggled(checked) }
+            }
+            inputs[field.key] = box
+            return box
         }
         val input: View = if (field.type == FieldType.CORNER) {
             Spinner(this).apply {
@@ -166,7 +174,19 @@ class MainActivity : Activity() {
         }
     }
 
+    /** Applied right away (not on save) so the overlay can be toggled while sync is running. */
+    private fun onOverlayToggled(checked: Boolean) {
+        SyncSettings.prefs(this).edit().putString(SettingsSchema.KEY_SHOW_OVERLAY, checked.toString()).apply()
+        if (!checked || Settings.canDrawOverlays(this)) return
+        try {
+            startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName")))
+        } catch (e: ActivityNotFoundException) {
+            toast("Allow the overlay from a computer: adb shell appops set $packageName SYSTEM_ALERT_WINDOW allow")
+        }
+    }
+
     private fun loadForm() {
+        loading = true
         val prefs = SyncSettings.prefs(this)
         for (field in SettingsSchema.fields) {
             val value = prefs.getString(field.key, null) ?: field.default
@@ -176,6 +196,7 @@ class MainActivity : Activity() {
                 is EditText -> view.setText(value)
             }
         }
+        loading = false
     }
 
     private fun saveForm() {
@@ -198,6 +219,5 @@ class MainActivity : Activity() {
 
     private companion object {
         const val REQUEST_CAPTURE = 1
-        const val BLACK_WARNING_MS = 3000L
     }
 }

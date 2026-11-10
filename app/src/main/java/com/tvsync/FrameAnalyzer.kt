@@ -37,6 +37,18 @@ class FrameAnalyzer(
     private var primed = false
     private val region = IntArray(4)
     private val rgb = FloatArray(3)
+    private val ignored = IntArray(4)
+    private var hasIgnored = false
+
+    /** Excludes a rectangle (e.g. our own on-screen overlay) from all color sampling. End-exclusive. */
+    fun setIgnoredArea(x0: Int, y0: Int, x1: Int, y1: Int) {
+        ignored[0] = x0; ignored[1] = y0; ignored[2] = x1; ignored[3] = y1
+        hasIgnored = x1 > x0 && y1 > y0
+    }
+
+    fun clearIgnoredArea() {
+        hasIgnored = false
+    }
 
     fun analyze(px: IntArray, w: Int, h: Int) {
         letterbox.update(px, w, h)
@@ -44,20 +56,18 @@ class FrameAnalyzer(
         val cx1 = w - letterbox.cols
         val cy0 = letterbox.rows
         val cy1 = h - letterbox.rows
-        avgLuma = averageLuma(px)
+        avgLuma = averageLuma(px, w)
 
         for (i in 0 until ledCount) {
             edgeRegion(order[i], cx0, cy0, cx1, cy1)
-            average(px, w, region[0], region[1], region[2], region[3])
-            blend(ledState, i * 3)
+            // A region fully hidden by the ignored area keeps its previous color.
+            if (average(px, w, region[0], region[1], region[2], region[3])) blend(ledState, i * 3)
             for (c in 0..2) ledBytes[i * 3 + c] = ledState[i * 3 + c].roundToInt().toByte()
         }
 
         val lampWidth = max(1, ((cx1 - cx0) * LAMP_WIDTH).roundToInt())
-        average(px, w, cx0, cy0, cx0 + lampWidth, cy1)
-        blend(lampState, 0)
-        average(px, w, cx1 - lampWidth, cy0, cx1, cy1)
-        blend(lampState, 3)
+        if (average(px, w, cx0, cy0, cx0 + lampWidth, cy1)) blend(lampState, 0)
+        if (average(px, w, cx1 - lampWidth, cy0, cx1, cy1)) blend(lampState, 3)
         leftLamp = pack(lampState, 0)
         rightLamp = pack(lampState, 3)
         primed = true
@@ -102,25 +112,27 @@ class FrameAnalyzer(
         }
     }
 
-    private fun average(px: IntArray, w: Int, x0: Int, y0: Int, x1: Int, y1: Int) {
+    /** Averages a rectangle into [rgb]. Returns false if no pixels were sampled. */
+    private fun average(px: IntArray, w: Int, x0: Int, y0: Int, x1: Int, y1: Int): Boolean {
         var r = 0L
         var g = 0L
         var b = 0L
+        var n = 0
         for (y in y0 until y1) {
+            val rowIgnored = hasIgnored && y >= ignored[1] && y < ignored[3]
             var i = y * w + x0
             for (x in x0 until x1) {
                 val p = px[i++]
+                if (rowIgnored && x >= ignored[0] && x < ignored[2]) continue
                 r += (p shr 16) and 0xff
                 g += (p shr 8) and 0xff
                 b += p and 0xff
+                n++
             }
         }
-        val n = (x1 - x0) * (y1 - y0)
-        if (n <= 0) {
-            rgb.fill(0f)
-            return
-        }
+        if (n == 0) return false
         adjust(r.toFloat() / n, g.toFloat() / n, b.toFloat() / n)
+        return true
     }
 
     private fun adjust(r: Float, g: Float, b: Float) {
@@ -139,11 +151,19 @@ class FrameAnalyzer(
     private fun pack(state: FloatArray, at: Int): Int =
         (state[at].roundToInt() shl 16) or (state[at + 1].roundToInt() shl 8) or state[at + 2].roundToInt()
 
-    private fun averageLuma(px: IntArray): Int {
-        if (px.isEmpty()) return 0
+    private fun averageLuma(px: IntArray, w: Int): Int {
         var sum = 0L
-        for (p in px) sum += luma(p)
-        return (sum / px.size).toInt()
+        var n = 0
+        for (i in px.indices) {
+            if (hasIgnored) {
+                val x = i % w
+                val y = i / w
+                if (x >= ignored[0] && x < ignored[2] && y >= ignored[1] && y < ignored[3]) continue
+            }
+            sum += luma(px[i])
+            n++
+        }
+        return if (n == 0) 0 else (sum / n).toInt()
     }
 
     companion object {

@@ -92,6 +92,22 @@ class FrameAnalyzerTest {
     }
 
     @Test
+    fun ignoredAreaIsExcludedFromSampling() {
+        val w = 32
+        val h = 18
+        // White box where the overlay would be, red everywhere else.
+        val withOverlay = frame(w, h) { x, y -> if (x < 16 && y < 6) 0xFFFFFF else red }
+        val a = analyzer(LedLayout(2, 0, 0, 0, StartCorner.TOP_LEFT, true))
+        a.setIgnoredArea(0, 0, 16, 6)
+        a.analyze(withOverlay, w, h)
+
+        assertEquals(red, a.leftLamp)
+        assertEquals(FrameAnalyzer.luma(red), a.avgLuma)
+        // The first top LED is fully covered, so it keeps its previous (initial black) color.
+        assertEquals(listOf(0, red), ledColors(a))
+    }
+
+    @Test
     fun smoothingMovesPartwayTowardNewColor() {
         val a = FrameAnalyzer(LedLayout(1, 0, 0, 0, StartCorner.TOP_LEFT, true), smoothing = 0.5f, saturation = 1f)
         a.analyze(IntArray(32 * 18), 32, 18)

@@ -8,6 +8,7 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.content.SharedPreferences
 import android.content.pm.ServiceInfo
 import android.graphics.PixelFormat
 import android.hardware.display.DisplayManager
@@ -20,12 +21,26 @@ import android.os.Handler
 import android.os.HandlerThread
 import android.os.IBinder
 import android.os.SystemClock
+import kotlin.math.ceil
+import kotlin.math.floor
 
 /** Foreground service that mirrors the screen into a tiny buffer and drives the lights from it. */
 class SyncService : Service() {
 
     @Volatile
     private var session: Session? = null
+
+    private lateinit var overlay: StatusOverlay
+
+    private val prefsListener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
+        if (key == SettingsSchema.KEY_SHOW_OVERLAY) applyOverlaySetting()
+    }
+
+    override fun onCreate() {
+        super.onCreate()
+        overlay = StatusOverlay(this)
+        SyncSettings.prefs(this).registerOnSharedPreferenceChangeListener(prefsListener)
+    }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -50,15 +65,27 @@ class SyncService : Service() {
         if (!next.start(resultCode, data)) {
             SyncStatus.lastError = "Screen capture could not be started."
             stopSelf()
+            return START_NOT_STICKY
         }
+        applyOverlaySetting()
         return START_NOT_STICKY
     }
 
     override fun onDestroy() {
+        SyncSettings.prefs(this).unregisterOnSharedPreferenceChangeListener(prefsListener)
+        overlay.hide()
         session?.stop()
         session = null
         SyncStatus.reset()
         super.onDestroy()
+    }
+
+    private fun applyOverlaySetting() {
+        if (session == null || !SyncSettings.load(this).showOverlay) {
+            overlay.hide()
+        } else if (!overlay.show()) {
+            SyncStatus.lastError = "Overlay needs permission: adb shell appops set $packageName SYSTEM_ALERT_WINDOW allow"
+        }
     }
 
     private fun startInForeground() {
@@ -206,6 +233,17 @@ class SyncService : Service() {
          * frames on change, but WLED drops out of realtime mode if packets stop.
          */
         private fun renderFrame(now: Long) {
+            val hidden = overlay.bounds
+            if (hidden == null) {
+                analyzer.clearIgnoredArea()
+            } else {
+                analyzer.setIgnoredArea(
+                    floor(hidden.left * CAPTURE_WIDTH).toInt(),
+                    floor(hidden.top * CAPTURE_HEIGHT).toInt(),
+                    ceil(hidden.right * CAPTURE_WIDTH).toInt(),
+                    ceil(hidden.bottom * CAPTURE_HEIGHT).toInt(),
+                )
+            }
             analyzer.analyze(pixels, CAPTURE_WIDTH, CAPTURE_HEIGHT)
             wled?.let {
                 try {

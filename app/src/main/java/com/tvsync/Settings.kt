@@ -35,6 +35,8 @@ data class Field(val key: String, val label: String, val type: FieldType, val de
 data class Section(val title: String, val fields: List<Field>)
 
 object SettingsSchema {
+    const val KEY_SHOW_OVERLAY = "show_overlay"
+
     val sections = listOf(
         Section(
             "WLED light strip",
@@ -71,6 +73,12 @@ object SettingsSchema {
                 Field("edge_depth", "How far into the picture to sample (0.05 to 0.5)", FieldType.DECIMAL, "0.15"),
             ),
         ),
+        Section(
+            "Display",
+            listOf(
+                Field(KEY_SHOW_OVERLAY, "Show status overlay on top of other apps while syncing", FieldType.BOOL, "false"),
+            ),
+        ),
     )
 
     val fields: List<Field> = sections.flatMap { it.fields }
@@ -94,6 +102,7 @@ data class SyncSettings(
     val saturation: Float,
     val brightness: Float,
     val edgeDepth: Float,
+    val showOverlay: Boolean,
 ) {
     companion object {
         private const val PREFS = "tv_sync"
@@ -134,6 +143,7 @@ data class SyncSettings(
                 saturation = float("saturation").coerceIn(0f, 3f),
                 brightness = float("brightness").coerceIn(0f, 1f),
                 edgeDepth = float("edge_depth").coerceIn(0.05f, 0.5f),
+                showOverlay = bool(SettingsSchema.KEY_SHOW_OVERLAY),
             )
         }
 
